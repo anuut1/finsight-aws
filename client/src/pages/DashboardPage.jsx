@@ -43,6 +43,7 @@ const DashboardPage = () => {
   const [modalTab, setModalTab] = useState('manual');
   const [saving, setSaving] = useState(false);
   const [magicBanner, setMagicBanner] = useState(null);
+  const [subscriptionBanner, setSubscriptionBanner] = useState(null);
 
   // Check URL query parameters for magic link approval confirmation
   useEffect(() => {
@@ -68,10 +69,15 @@ const DashboardPage = () => {
     ? budgets.reduce((sum, b) => sum + (Number(b.limit) || 0), 0)
     : 0;
 
-  const handleTransactionCreated = (newTx) => {
+  const handleTransactionCreated = (newTx, extra = null) => {
     setRefreshCount((c) => c + 1);
     if (newTx && newTx._id) {
       setRecentlyAddedTx(newTx);
+    }
+    const sub = extra?.subscriptionDetected || newTx?.subscriptionDetected;
+    if (sub) {
+      setSubscriptionBanner(sub);
+      setTimeout(() => setSubscriptionBanner(null), 8000);
     }
   };
 
@@ -80,7 +86,7 @@ const DashboardPage = () => {
     try {
       const res = await api.post('/transactions', payload);
       if (res.data?.success) {
-        handleTransactionCreated(res.data.data);
+        handleTransactionCreated(res.data.data, res.data);
         setModalOpen(false);
         return res.data;
       }
@@ -139,6 +145,49 @@ const DashboardPage = () => {
 
   return (
     <div className="quiet-ledger-dashboard" style={{ maxWidth: '1280px', margin: '0 auto', paddingBottom: '5rem' }}>
+      {/* Subscription Recognition Banner */}
+      {subscriptionBanner && (
+        <div
+          role="status"
+          style={{
+            marginBottom: '1.25rem',
+            padding: '0.85rem 1.25rem',
+            background: 'rgba(99, 102, 241, 0.12)',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
+            borderRadius: 'var(--radius-md, 10px)',
+            color: '#818CF8',
+            fontSize: '0.9rem',
+            fontWeight: 500,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '1.25rem' }}>{subscriptionBanner.logo || '🔔'}</span>
+            <span>
+              <strong>{subscriptionBanner.name}</strong> subscription recognized! Next due date set to{' '}
+              <strong>{new Date(subscriptionBanner.nextDueDate).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })}</strong>.
+              Automated reminder scheduled.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSubscriptionBanner(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: 'currentColor',
+              cursor: 'pointer',
+              fontSize: '1rem',
+              padding: '0 4px',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* Magic link confirmation banner */}
       {magicBanner && (
         <div

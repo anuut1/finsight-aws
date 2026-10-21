@@ -10,6 +10,7 @@ const {
   sweepAllUsersForEodReminders,
 } = require('../services/eodReminderService');
 const { logger } = require('../utils/logger');
+const { syncTransactionSubscription, sendUpcomingSubscriptionReminders } = require('../services/subscriptionService');
 
 exports.getTransactions = async (req, res) => {
   try {
@@ -152,7 +153,24 @@ exports.createTransaction = async (req, res) => {
       }
     }
 
-    return res.status(201).json({ success: true, data: transaction });
+    // Automatically detect recurring subscription (Netflix, Spotify, etc.) and schedule next due date
+    let subscriptionDetected = null;
+    if (finalStatus === 'confirmed' && type === 'expense') {
+      subscriptionDetected = await syncTransactionSubscription({
+        userId: req.user.id,
+        description: description || transaction.description,
+        amount,
+        date: transaction.date,
+        category: transaction.category,
+        paymentMethod: finalTags.includes('card') ? 'Credit Card' : 'UPI',
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: transaction,
+      subscriptionDetected,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ success: false, message: 'Server error' });
@@ -423,8 +441,11 @@ exports.triggerEodReminder = async (req, res) => {
 
     // Otherwise, triggered by EventBridge / Lambda with secret
     if (req.isCronTrigger) {
-      const results = await sweepAllUsersForEodReminders();
-      return res.json({ success: true, data: results });
+      const [draftResults, subscriptionResults] = await Promise.all([
+        sweepAllUsersForEodReminders(),
+        sendUpcomingSubscriptionReminders(3),
+      ]);
+      return res.json({ success: true, data: { drafts: draftResults, subscriptions: subscriptionResults } });
     }
 
     return res.status(401).json({ success: false, message: 'Unauthorized trigger' });

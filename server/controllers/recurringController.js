@@ -271,3 +271,15 @@ exports.initStarterPresets = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
+
+exports.sweepSubscriptionReminders = async (req, res) => {
+  try {
+    const daysAhead = Number(req.query.daysAhead || req.body?.daysAhead) || 3;
+    const { sendUpcomingSubscriptionReminders } = require('../services/subscriptionService');
+    const results = await sendUpcomingSubscriptionReminders(daysAhead);
+    return res.json({ success: true, data: results });
+  } catch (err) {
+    console.error('Error sweeping subscription reminders:', err);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};

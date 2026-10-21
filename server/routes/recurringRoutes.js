@@ -6,6 +6,7 @@ const {
   deleteRecurringTemplate,
   logRecurringPayment,
   initStarterPresets,
+  sweepSubscriptionReminders,
 } = require('../controllers/recurringController');
 const { validate, z } = require('../middleware/validate');
 
@@ -46,5 +47,6 @@ router.post('/presets', initStarterPresets);
 router.put('/:id', validate(updateRecurringSchema), updateRecurringTemplate);
 router.delete('/:id', deleteRecurringTemplate);
 router.post('/:id/log', logRecurringPayment);
+router.post('/sweep-reminders', sweepSubscriptionReminders);
 
 module.exports = router;
