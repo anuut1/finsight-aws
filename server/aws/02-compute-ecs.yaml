@@ -1,0 +1,425 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight Phase 2: Production VPC (2 AZs), Internet-Facing ALB, ECS Fargate Service, Auto Scaling, and CloudFront Backend Routing'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging, dev]
+
+  OriginVerifyHeaderSecret:
+    Type: String
+    NoEcho: true
+    Default: 'FinSight-Origin-Verify-2026-SecretToken-ap-south-1'
+    Description: 'Secret verification header passed by CloudFront to ALB to block direct web access'
+
+  AppSecretsArn:
+    Type: String
+    Default: 'arn:aws:secretsmanager:ap-south-1:982503294595:secret:finsight/prod/app-secrets-UXVgBv'
+    Description: 'ARN of existing Secrets Manager secret'
+
+  TaskExecutionRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::982503294595:role/FinSightTaskExecutionRole-prod'
+    Description: 'ARN of existing ECS Task Execution Role'
+
+  TaskRoleArn:
+    Type: String
+    Default: 'arn:aws:iam::982503294595:role/FinSightTaskRole-prod'
+    Description: 'ARN of existing ECS Task Runtime Role'
+
+  EcrImageUri:
+    Type: String
+    Default: '982503294595.dkr.ecr.ap-south-1.amazonaws.com/finsight-api-prod:latest'
+    Description: 'ECR container image URI'
+
+Resources:
+  # ========================================================
+  # 1. VPC & Networking (2 AZs, Zero-NAT Cost-Optimized)
+  # ========================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.50.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-vpc-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-igw-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.50.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-public-subnet-1-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.50.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-public-subnet-2-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-public-rt-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  # ========================================================
+  # 2. Least-Privilege Security Groups
+  # ========================================================
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow HTTP traffic to ALB strictly forwarded to verified origin'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-alb-sg-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  EcsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Allow API traffic to ECS tasks strictly from ALB'
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: 'Allow outbound to MongoDB Atlas TLS 27017 and AWS service endpoints'
+      Tags:
+        - Key: Name
+          Value: !Sub 'finsight-ecs-sg-${EnvironmentName}'
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 3. Application Load Balancer & Target Group
+  # ========================================================
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub 'finsight-alb-${EnvironmentName}'
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub 'finsight-api-tg-${EnvironmentName}'
+      Port: 5000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VPC
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '15'
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  AlbHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: '403'
+            ContentType: 'application/json'
+            MessageBody: '{"error":"Direct ALB access forbidden. Please access via CloudFront distribution."}'
+
+  AlbOriginVerifyRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref AlbHttpListener
+      Priority: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-FinSight-Origin-Verify
+            Values:
+              - !Ref OriginVerifyHeaderSecret
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ========================================================
+  # 4. Amazon ECS Cluster & CloudWatch Log Group
+  # ========================================================
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub 'finsight-cluster-${EnvironmentName}'
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  EcsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/finsight-api-${EnvironmentName}'
+      RetentionInDays: 14
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 5. ECS Task Definition (Fargate 0.25 vCPU, 0.5 GB)
+  # ========================================================
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'finsight-api-${EnvironmentName}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !Ref TaskExecutionRoleArn
+      TaskRoleArn: !Ref TaskRoleArn
+      ContainerDefinitions:
+        - Name: api
+          Image: !Ref EcrImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5000
+              Protocol: tcp
+          Environment:
+            - Name: PORT
+              Value: '5000'
+            - Name: NODE_ENV
+              Value: 'production'
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_RECEIPTS_BUCKET
+              Value: 'finsight-receipts-private-prod-5196'
+            - Name: AWS_SES_FROM_EMAIL
+              Value: 'anushree.tiwari2024@vitstudent.ac.in'
+          Secrets:
+            - Name: MONGO_URI
+              ValueFrom: !Sub '${AppSecretsArn}:MONGO_URI::'
+            - Name: JWT_SECRET
+              ValueFrom: !Sub '${AppSecretsArn}:JWT_SECRET::'
+            - Name: REMINDER_SECRET_KEY
+              ValueFrom: !Sub '${AppSecretsArn}:REMINDER_SECRET_KEY::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref EcsLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 6. ECS Fargate Service
+  # ========================================================
+  EcsService:
+    Type: AWS::ECS::Service
+    DependsOn: AlbOriginVerifyRule
+    Properties:
+      ServiceName: !Sub 'finsight-api-service-${EnvironmentName}'
+      Cluster: !Ref EcsCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups:
+            - !Ref EcsSecurityGroup
+      LoadBalancers:
+        - ContainerName: api
+          ContainerPort: 5000
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 7. Application Auto Scaling (Min 1, Max 3 Tasks)
+  # ========================================================
+  EcsScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 3
+      MinCapacity: 1
+      ResourceId: !Sub 'service/${EcsCluster}/${EcsService.Name}'
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+      ScalableDimension: 'ecs:service:DesiredCount'
+      ServiceNamespace: ecs
+
+  CpuScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub 'finsight-cpu-scaling-${EnvironmentName}'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EcsScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 70.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+  RequestCountScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub 'finsight-request-count-scaling-${EnvironmentName}'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref EcsScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 1000.0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Sub '${ApplicationLoadBalancer.LoadBalancerFullName}/${TargetGroup.TargetGroupFullName}'
+        ScaleInCooldown: 60
+        ScaleOutCooldown: 60
+
+Outputs:
+  VpcId:
+    Description: 'FinSight VPC ID'
+    Value: !Ref VPC
+    Export:
+      Name: !Sub '${AWS::StackName}-VpcId'
+
+  AlbDnsName:
+    Description: 'Application Load Balancer DNS Name'
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-AlbDnsName'
+
+  TargetGroupArn:
+    Description: 'Target Group ARN'
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupArn'
+
+  EcsClusterName:
+    Description: 'ECS Cluster Name'
+    Value: !Ref EcsCluster
+    Export:
+      Name: !Sub '${AWS::StackName}-EcsClusterName'
+
+  EcsServiceName:
+    Description: 'ECS Service Name'
+    Value: !GetAtt EcsService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-EcsServiceName'
