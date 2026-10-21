@@ -330,6 +330,7 @@ Resources:
     Properties:
       ServiceName: !Sub 'finsight-api-service-${EnvironmentName}'
       Cluster: !Ref EcsCluster
+      TaskDefinition: !Ref TaskDefinition
       LaunchType: FARGATE
       DesiredCount: 1
       NetworkConfiguration:
