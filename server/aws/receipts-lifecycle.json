@@ -1,0 +1,14 @@
+{
+  "Rules": [
+    {
+      "ID": "DeleteReceiptsAfter30Days",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "receipts/"
+      },
+      "Expiration": {
+        "Days": 30
+      }
+    }
+  ]
+}

@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight Phase 1 Foundation: S3 Static Web, CloudFront OAC, Secrets Manager, Budgets, and IAM Roles'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging, dev]
+    Description: Environment stage name
+
+  MonthlyBudgetLimit:
+    Type: Number
+    Default: 50
+    Description: Monthly budget limit in USD
+
+  AlertEmail:
+    Type: String
+    Default: anushree.tiwari2024@vitstudent.ac.in
+    Description: Email address for budget threshold alerts
+
+  ReceiptsBucketName:
+    Type: String
+    Default: finsight-receipts-private-prod-5196
+    Description: Name of the existing private receipts S3 bucket
+
+Resources:
+  # ========================================================
+  # 1. AWS Monthly Budget with 50%, 80%, 100% Thresholds
+  # ========================================================
+  FinSightBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub 'finsight-monthly-budget-${EnvironmentName}'
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetLimit
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+  # ========================================================
+  # 2. Centralized Secrets Manager Secret
+  # ========================================================
+  AppSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'finsight/${EnvironmentName}/app-secrets'
+      Description: 'Application secrets for FinSight backend (MONGO_URI, JWT_SECRET, etc.)'
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 3. Frontend Static Web S3 Bucket (Private, CloudFront Only)
+  # ========================================================
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'finsight-web-${EnvironmentName}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 4. CloudFront Origin Access Control (OAC)
+  # ========================================================
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'FinSight-Web-OAC-${EnvironmentName}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ========================================================
+  # 5. CloudFront CDN Distribution
+  # ========================================================
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'FinSight Web CDN (${EnvironmentName})'
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        # Single Page App routing fallback
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+        Origins:
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # CachingOptimized
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 6. S3 Bucket Policy (Restricts S3 Access strictly to CloudFront OAC)
+  # ========================================================
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ========================================================
+  # 7. ECS Task Execution Role (Pulls images, fetches Secrets)
+  # ========================================================
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightTaskExecutionRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2010-09-09'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadSecretsPolicy
+          PolicyDocument:
+            Version: '2010-09-09'
+            Statement:
+              - Sid: AccessAppSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref AppSecrets
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 8. ECS Task Role (Runtime least-privilege: Textract, SES, S3)
+  # ========================================================
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightTaskRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2010-09-09'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FinSightWorkloadPermissions
+          PolicyDocument:
+            Version: '2010-09-09'
+            Statement:
+              - Sid: TextractExpenseAnalysis
+                Effect: Allow
+                Action:
+                  - textract:AnalyzeExpense
+                Resource: '*'
+              - Sid: SesSendEmail
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              - Sid: S3ReceiptsAccess
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${ReceiptsBucketName}/*'
+              - Sid: ReadSecrets
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref AppSecrets
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+Outputs:
+  CloudFrontDistributionId:
+    Description: 'CloudFront Distribution ID'
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'
+
+  CloudFrontDomainName:
+    Description: 'CloudFront Public HTTPS Domain'
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomainName'
+
+  FrontendBucketName:
+    Description: 'S3 Frontend Bucket Name'
+    Value: !Ref FrontendBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-FrontendBucketName'
+
+  AppSecretsArn:
+    Description: 'Secrets Manager Secret ARN'
+    Value: !Ref AppSecrets
+    Export:
+      Name: !Sub '${AWS::StackName}-AppSecretsArn'
+
+  TaskExecutionRoleArn:
+    Description: 'IAM Task Execution Role ARN'
+    Value: !GetAtt TaskExecutionRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskExecutionRoleArn'
+
+  TaskRoleArn:
+    Description: 'IAM Task Role ARN'
+    Value: !GetAtt TaskRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskRoleArn'
