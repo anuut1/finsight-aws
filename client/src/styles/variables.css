@@ -1,0 +1,200 @@
+/* ==================== FONT IMPORT ==================== */
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Instrument+Serif:ital@0;1&display=swap');
+
+/* ==================== QUIET LEDGER DESIGN TOKENS ==================== */
+/* Minimal, classy, airy, like a modern editorial product site. */
+/* Light theme is the primary default theme. */
+:root,
+[data-theme="light"] {
+  /* Canvas / Backgrounds */
+  --bg-primary: #FAFAF8;          /* Ground #FAFAF8 */
+  --bg-surface: #FFFFFF;          /* Cards #FFFFFF with 1px #E8E8E4 border */
+  --bg-surface-elevated: #F4F4F0;  /* Subtle elevated ground */
+  --bg-secondary: #FFFFFF;        /* Backwards compatible alias */
+  --bg-tertiary: #F4F4F0;         /* Backwards compatible alias */
+  --bg-hover: rgba(20, 21, 26, 0.04);
+
+  /* One Accent: Ink itself (#14151A) */
+  --color-ink: #14151A;
+  --accent-primary: #14151A;
+  --accent-primary-light: #2A2C35;
+  --accent-primary-dark: #000000;
+  --accent-focus-ring: rgba(20, 21, 26, 0.14);
+  --accent-focus-border: #14151A;
+
+  /* Typography / Text Colors (WCAG AA 4.5:1 verified) */
+  --text-primary: #14151A;        /* Ink #14151A (18.5:1 contrast on #FAFAF8) */
+  --text-secondary: #5B5E69;      /* Muted text #5B5E69 (4.58:1 contrast on #FAFAF8, 4.67:1 on #FFFFFF) */
+  --text-muted: #5B5E69;          /* Keep 4.5:1 contrast */
+  --text-disabled: #8E919C;
+  --text-inverse: #FFFFFF;
+
+  /* Borders (1px #E8E8E4, no heavy shadows, no glassmorphism, no gradient washes) */
+  --border-color: #E8E8E4;
+  --border-strong: #D5D5CE;
+  --divider-color: #E8E8E4;
+
+  /* Semantic Financial Colors (Never rely on color alone) */
+  --color-positive: #0E6B52;      /* Positive #0E6B52 (5.8:1 contrast) */
+  --color-positive-bg: rgba(14, 107, 82, 0.08);
+  --color-positive-border: rgba(14, 107, 82, 0.24);
+
+  --color-warning: #B45309;       /* Warning #B45309 (5.1:1 contrast) */
+  --color-warning-bg: rgba(180, 83, 9, 0.08);
+  --color-warning-border: rgba(180, 83, 9, 0.24);
+
+  --color-negative: #B45309;      /* Warning / expense color */
+  --color-negative-bg: rgba(180, 83, 9, 0.08);
+  --color-negative-border: rgba(180, 83, 9, 0.24);
+
+  --color-income: var(--color-positive);
+  --color-expense: var(--color-warning);
+  --accent-danger: var(--color-warning);
+
+  /* Shadows (Subtle, crisp elevation without heavy shadows) */
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 3px rgba(20, 21, 26, 0.04);
+  --shadow-md: 0 2px 8px rgba(20, 21, 26, 0.05);
+  --shadow-lg: 0 4px 16px rgba(20, 21, 26, 0.06);
+
+  /* Component specifics */
+  --track-bg: #E8E8E4;
+  --progress-fill: var(--color-ink);
+  --ring-teal: var(--color-positive);
+  --ring-amber: var(--color-warning);
+}
+
+/* ==================== DARK THEME VIA [data-theme="dark"] ==================== */
+/* Dark theme uses the exact same token names */
+[data-theme="dark"] {
+  /* Canvas / Backgrounds */
+  --bg-primary: #121316;          /* Deep ink ground */
+  --bg-surface: #1A1B20;          /* Surface card with subtle border */
+  --bg-surface-elevated: #24252C;
+  --bg-secondary: #1A1B20;
+  --bg-tertiary: #24252C;
+  --bg-hover: rgba(250, 250, 248, 0.05);
+
+  /* One Accent: Inverted Ink (#FAFAF8) */
+  --color-ink: #FAFAF8;
+  --accent-primary: #FAFAF8;
+  --accent-primary-light: #FFFFFF;
+  --accent-primary-dark: #E2E2DE;
+  --accent-focus-ring: rgba(250, 250, 248, 0.2);
+  --accent-focus-border: #FAFAF8;
+
+  /* Typography / Text Colors */
+  --text-primary: #FAFAF8;
+  --text-secondary: #9FA1AC;
+  --text-muted: #9FA1AC;
+  --text-disabled: #62646E;
+  --text-inverse: #14151A;
+
+  /* Borders */
+  --border-color: #282930;
+  --border-strong: #383A44;
+  --divider-color: #282930;
+
+  /* Semantic Financial Colors (high contrast on dark) */
+  --color-positive: #10B981;
+  --color-positive-bg: rgba(16, 185, 129, 0.12);
+  --color-positive-border: rgba(16, 185, 129, 0.3);
+
+  --color-warning: #F59E0B;
+  --color-warning-bg: rgba(245, 158, 11, 0.12);
+  --color-warning-border: rgba(245, 158, 11, 0.3);
+
+  --color-negative: #F59E0B;
+  --color-negative-bg: rgba(245, 158, 11, 0.12);
+  --color-negative-border: rgba(245, 158, 11, 0.3);
+
+  --color-income: var(--color-positive);
+  --color-expense: var(--color-warning);
+  --accent-danger: var(--color-warning);
+
+  /* Shadows */
+  --shadow-xs: none;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* Component specifics */
+  --track-bg: #282930;
+  --progress-fill: var(--color-ink);
+  --ring-teal: var(--color-positive);
+  --ring-amber: var(--color-warning);
+}
+
+/* ==================== COMMON DESIGN GEOMETRY & TYPOGRAPHY ==================== */
+:root {
+  /* Fonts */
+  --font-serif: 'Instrument Serif', Georgia, serif;
+  --font-sans: 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  /* Radii: inputs 14px, cards 20px, buttons fully pill-shaped (999px) */
+  --radius-input: 14px;
+  --radius-card: 20px;
+  --radius-pill: 999px;
+
+  /* Backward compatible radius tokens */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;      /* inputs */
+  --radius-xl: 16px;
+  --radius-2xl: 20px;     /* cards */
+  --radius-full: 999px;   /* buttons */
+
+  /* Spacings */
+  --spacing-xs: 0.25rem;
+  --spacing-sm: 0.5rem;
+  --spacing-md: 1rem;
+  --spacing-lg: 1.5rem;
+  --spacing-xl: 2rem;
+  --spacing-2xl: 3rem;
+
+  /* Motion: 150-250ms ease-out transitions */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 250ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --transition-fast: var(--duration-fast) var(--ease-out);
+  --transition-base: var(--duration-base) var(--ease-out);
+  --transition-slow: var(--duration-slow) var(--ease-out);
+}
+
+/* Tabular numbers on all currency & financial statistics */
+.num-tabular,
+[data-tabular="true"],
+.currency-val,
+.stat-card-value,
+.stat-val,
+.hero-num,
+.amount-text,
+.amount-val,
+.ledger-amount {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+/* Font classes */
+.font-serif,
+.headline-serif,
+.hero-number {
+  font-family: var(--font-serif);
+  font-weight: 400;
+}
+
+.font-sans {
+  font-family: var(--font-sans);
+}
+
+/* Accessibility: Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

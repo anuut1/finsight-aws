@@ -1,0 +1,96 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: FinSight End-of-Day Drafts Reminder (EventBridge Scheduler -> Lambda -> SES/SNS)
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [development, staging, production]
+  FinSightApiUrl:
+    Type: String
+    Description: Base URL of the FinSight backend API (e.g. https://api.finsight.app)
+  ReminderSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Shared secret key for authenticating the scheduled reminder trigger
+  CronSchedule:
+    Type: String
+    Default: 'cron(0 21 * * ? *)' # Daily at 21:00 UTC (or adjust for local timezone)
+    Description: EventBridge Scheduler cron expression
+
+Resources:
+  # IAM Role for EventBridge Scheduler to invoke the Lambda function
+  SchedulerExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt EodReminderFunction.Arn
+
+  # AWS Lambda Function for triggering End-of-Day reminders
+  EodReminderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub finsight-eod-reminder-${Environment}
+      CodeUri: eodReminderLambda/
+      Handler: index.handler
+      Runtime: nodejs20.x
+      Timeout: 30
+      MemorySize: 256
+      Architectures:
+        - arm64 # Cost-effective Graviton2 architecture
+      Environment:
+        Variables:
+          FINSIGHT_API_URL: !Ref FinSightApiUrl
+          REMINDER_SECRET_KEY: !Ref ReminderSecretKey
+          NODE_ENV: !Ref Environment
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+                - sns:Publish
+              Resource: '*'
+
+  # Amazon EventBridge Scheduler Schedule (runs every day at 21:00)
+  DailyReminderSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub finsight-daily-reminder-${Environment}
+      Description: Triggers FinSight End-of-Day unconfirmed drafts reminder
+      ScheduleExpression: !Ref CronSchedule
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      State: ENABLED
+      Target:
+        Arn: !GetAtt EodReminderFunction.Arn
+        RoleArn: !GetAtt SchedulerExecutionRole.Arn
+        Input: !Sub |
+          {
+            "job": "eod_drafts_reminder",
+            "triggeredBy": "AWS::Scheduler",
+            "timestamp": "<aws.scheduler.execution-time>"
+          }
+
+Outputs:
+  LambdaFunctionArn:
+    Description: ARN of the FinSight EOD Reminder Lambda Function
+    Value: !GetAtt EodReminderFunction.Arn
+  ScheduleArn:
+    Description: ARN of the EventBridge Scheduler
+    Value: !GetAtt DailyReminderSchedule.Arn

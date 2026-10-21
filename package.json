@@ -1,0 +1,20 @@
+{
+  "name": "finsight-aws",
+  "version": "1.0.0",
+  "private": true,
+  "description": "FinSight - Smart Personal Finance & Bill Splitting on AWS Cloud Architecture",
+  "scripts": {
+    "dev": "npm run dev:server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "build": "npm run build --prefix client",
+    "start": "npm start --prefix server",
+    "test": "npm run test:server && npm run test:client",
+    "test:server": "npm test --prefix server",
+    "test:client": "npm test --prefix client",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}

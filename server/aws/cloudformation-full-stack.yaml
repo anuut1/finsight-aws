@@ -1,0 +1,306 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight Complete Production Infrastructure (Frontend S3+CloudFront, Backend App Runner, ECR, S3 Receipts, IAM)'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging, dev]
+    Description: Environment stage name
+
+  MongoUri:
+    Type: String
+    NoEcho: true
+    Description: MongoDB Atlas connection string (e.g. mongodb+srv://user:pass@cluster.mongodb.net/finsight)
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: Secure 64-character hex secret for JWT signing
+
+  ReminderSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Shared secret for EventBridge/Lambda cron invocations
+
+  SesFromEmail:
+    Type: String
+    Default: notifications@yourdomain.com
+    Description: Verified SES email address for sending digests and claim notifications
+
+Resources:
+  # ========================================================
+  # 1. ECR Repository for Backend Container Images
+  # ========================================================
+  ApiEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'finsight-api-${EnvironmentName}'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 container images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ========================================================
+  # 2. Private S3 Bucket for Receipts (30-Day Auto-Delete)
+  # ========================================================
+  ReceiptsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'finsight-receipts-private-${EnvironmentName}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteReceiptsAfter30Days
+            Status: Enabled
+            Filter:
+              Prefix: receipts/
+            ExpirationInDays: 30
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [PUT, GET, HEAD]
+            AllowedOrigins: ['*']
+            MaxAge: 3600
+
+  # ========================================================
+  # 3. Frontend Static S3 Bucket (Private, CloudFront Only)
+  # ========================================================
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'finsight-web-${EnvironmentName}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+  # ========================================================
+  # 4. IAM Roles for App Runner
+  # ========================================================
+  AppRunnerAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightAppRunnerAccessRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2010-09-09'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: build.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  AppRunnerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightAppRunnerInstanceRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2010-09-09'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: tasks.apprunner.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FinSightBackendPermissions
+          PolicyDocument:
+            Version: '2010-09-09'
+            Statement:
+              # Amazon Textract for receipt scanning
+              - Effect: Allow
+                Action:
+                  - textract:AnalyzeExpense
+                Resource: '*'
+              # Amazon SES for emails
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              # S3 Receipts access
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                Resource: !Sub '${ReceiptsBucket.Arn}/*'
+
+  # ========================================================
+  # 5. AWS App Runner Service (Node.js 20 Backend)
+  # ========================================================
+  AppRunnerService:
+    Type: AWS::AppRunner::Service
+    Properties:
+      ServiceName: !Sub 'finsight-api-${EnvironmentName}'
+      SourceConfiguration:
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerAccessRole.Arn
+        AutoDeploymentsEnabled: true
+        ImageRepository:
+          ImageIdentifier: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/finsight-api-${EnvironmentName}:latest'
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: '5000'
+            RuntimeEnvironmentVariables:
+              - Name: NODE_ENV
+                Value: production
+              - Name: PORT
+                Value: '5000'
+              - Name: AWS_REGION
+                Value: !Ref AWS::Region
+              - Name: MONGO_URI
+                Value: !Ref MongoUri
+              - Name: JWT_SECRET
+                Value: !Ref JwtSecret
+              - Name: REMINDER_SECRET_KEY
+                Value: !Ref ReminderSecretKey
+              - Name: AWS_RECEIPTS_BUCKET
+                Value: !Ref ReceiptsBucket
+              - Name: AWS_SES_FROM_EMAIL
+                Value: !Ref SesFromEmail
+      InstanceConfiguration:
+        Cpu: '1 vCPU'
+        Memory: '2 GB'
+        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /api/health
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+
+  # ========================================================
+  # 6. CloudFront Origin Access Control (OAC)
+  # ========================================================
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'FinSight-OAC-${EnvironmentName}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ========================================================
+  # 7. CloudFront Distribution (Unified Frontend + Backend API)
+  # ========================================================
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'FinSight Global Distribution (${EnvironmentName})'
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100 # Low cost: North America, Europe, Asia
+        # SPA 404/403 routing fallback to index.html
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+        Origins:
+          # Origin 1: Frontend S3
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+          # Origin 2: Backend App Runner API
+          - Id: BackendApiOrigin
+            DomainName: !GetAtt AppRunnerService.ServiceUrl
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        # Default behavior: Serve frontend static web assets
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 # CachingOptimized
+        # Path behavior: Proxy /api/* to App Runner with NO CORS required
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: BackendApiOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            Compress: true
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad # CachingDisabled
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac # AllViewerExceptHostHeader
+
+  # ========================================================
+  # 8. S3 Bucket Policy (Allows only CloudFront OAC)
+  # ========================================================
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2010-09-09'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+Outputs:
+  CloudFrontUrl:
+    Description: 'Public HTTPS URL for FinSight Web Application'
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+
+  AppRunnerServiceUrl:
+    Description: 'Direct App Runner API URL'
+    Value: !Sub 'https://${AppRunnerService.ServiceUrl}'
+
+  EcrRepositoryUri:
+    Description: 'ECR Repository URI to push Docker images'
+    Value: !GetAtt ApiEcrRepository.RepositoryUri
+
+  FrontendBucketName:
+    Description: 'S3 Bucket Name for Frontend Assets'
+    Value: !Ref FrontendBucket
+
+  ReceiptsBucketName:
+    Description: 'S3 Bucket Name for Receipts (30-day lifecycle)'
+    Value: !Ref ReceiptsBucket
