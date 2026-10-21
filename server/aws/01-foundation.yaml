@@ -122,7 +122,6 @@ Resources:
         Comment: !Sub 'FinSight Web CDN (${EnvironmentName})'
         DefaultRootObject: index.html
         PriceClass: PriceClass_100
-        # Single Page App routing fallback
         CustomErrorResponses:
           - ErrorCode: 403
             ResponseCode: 200
@@ -179,7 +178,7 @@ Resources:
     Properties:
       RoleName: !Sub 'FinSightTaskExecutionRole-${EnvironmentName}'
       AssumeRolePolicyDocument:
-        Version: '2010-09-09'
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -190,7 +189,7 @@ Resources:
       Policies:
         - PolicyName: ReadSecretsPolicy
           PolicyDocument:
-            Version: '2010-09-09'
+            Version: '2012-10-17'
             Statement:
               - Sid: AccessAppSecrets
                 Effect: Allow
@@ -211,7 +210,7 @@ Resources:
     Properties:
       RoleName: !Sub 'FinSightTaskRole-${EnvironmentName}'
       AssumeRolePolicyDocument:
-        Version: '2010-09-09'
+        Version: '2012-10-17'
         Statement:
           - Effect: Allow
             Principal:
@@ -220,7 +219,7 @@ Resources:
       Policies:
         - PolicyName: FinSightWorkloadPermissions
           PolicyDocument:
-            Version: '2010-09-09'
+            Version: '2012-10-17'
             Statement:
               - Sid: TextractExpenseAnalysis
                 Effect: Allow
