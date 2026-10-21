@@ -1,0 +1,40 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing dependencies..."
+      - cd server && npm ci
+      - cd ../client && npm ci
+      - cd ..
+
+  pre_build:
+    commands:
+      - echo "Running backend automated tests..."
+      - cd server && npm test
+      - cd ..
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $IMAGE_REPO_URL
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:-latest}
+
+  build:
+    commands:
+      - echo "Building backend Docker container..."
+      - cd server
+      - docker build -t $IMAGE_REPO_URL:latest -t $IMAGE_REPO_URL:$IMAGE_TAG .
+      - docker push $IMAGE_REPO_URL:latest
+      - docker push $IMAGE_REPO_URL:$IMAGE_TAG
+      - printf '[{"name":"api","imageUri":"%s"}]' "$IMAGE_REPO_URL:$IMAGE_TAG" > imagedefinitions.json
+      - cd ..
+
+  post_build:
+    commands:
+      - echo "Backend container built and pushed successfully on $(date)."
+
+artifacts:
+  files:
+    - server/imagedefinitions.json
+  discard-paths: yes

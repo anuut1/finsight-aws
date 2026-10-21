@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight Phase 2: ECR Container Registry and Automated CodeBuild Image Builder'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedValues: [prod, staging, dev]
+
+  GitHubRepoUrl:
+    Type: String
+    Default: 'https://github.com/anuut1/finsight-aws.git'
+    Description: 'Public GitHub repository URL for FinSight codebase'
+
+Resources:
+  # ========================================================
+  # 1. Amazon ECR Private Repository for Backend Images
+  # ========================================================
+  ApiEcrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub 'finsight-api-${EnvironmentName}'
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Retain last 5 tagged images to optimize ECR storage cost",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 2. IAM Service Role for AWS CodeBuild
+  # ========================================================
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightCodeBuildRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogsAccess
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+              - Sid: EcrAuthorization
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: EcrPushPullAccess
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource: !GetAtt ApiEcrRepository.Arn
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 3. AWS CodeBuild Project (Docker-in-Docker cloud build)
+  # ========================================================
+  BackendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'finsight-backend-build-${EnvironmentName}'
+      Description: 'Builds and scans Docker container image for FinSight backend and pushes to ECR'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: IMAGE_REPO_URL
+            Value: !GetAtt ApiEcrRepository.RepositoryUri
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepoUrl
+        BuildSpec: buildspec.yml
+      TimeoutInMinutes: 15
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+Outputs:
+  EcrRepositoryUri:
+    Description: 'ECR Repository URI'
+    Value: !GetAtt ApiEcrRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-EcrRepositoryUri'
+
+  EcrRepositoryArn:
+    Description: 'ECR Repository ARN'
+    Value: !GetAtt ApiEcrRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-EcrRepositoryArn'
+
+  CodeBuildProjectName:
+    Description: 'CodeBuild Project Name'
+    Value: !Ref BackendBuildProject
+    Export:
+      Name: !Sub '${AWS::StackName}-CodeBuildProjectName'
