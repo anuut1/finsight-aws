@@ -228,7 +228,7 @@ Resources:
                 Action:
                   - codeconnections:UseConnection
                   - codestar-connections:UseConnection
-                Resource: !GetAtt CodeStarGitHubConnection.Arn
+                Resource: !GetAtt CodeStarGitHubConnection.ConnectionArn
               - Sid: CodeBuildExecution
                 Effect: Allow
                 Action:
@@ -288,7 +288,7 @@ Resources:
               OutputArtifacts:
                 - Name: SourceOutput
               Configuration:
-                ConnectionArn: !GetAtt CodeStarGitHubConnection.Arn
+                ConnectionArn: !GetAtt CodeStarGitHubConnection.ConnectionArn
                 FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
                 BranchName: !Ref GitHubBranch
                 OutputArtifactFormat: CODE_ZIP
@@ -374,7 +374,7 @@ Outputs:
 
   GitHubConnectionArn:
     Description: 'CodeConnection ARN (Must be activated in AWS Console)'
-    Value: !GetAtt CodeStarGitHubConnection.Arn
+    Value: !GetAtt CodeStarGitHubConnection.ConnectionArn
     Export:
       Name: !Sub '${AWS::StackName}-GitHubConnectionArn'
 
