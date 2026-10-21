@@ -11,6 +11,7 @@ const {
 } = require('../services/eodReminderService');
 const { logger } = require('../utils/logger');
 const { syncTransactionSubscription, sendUpcomingSubscriptionReminders } = require('../services/subscriptionService');
+const dynamoService = require('../services/dynamoService');
 
 exports.getTransactions = async (req, res) => {
   try {
@@ -165,6 +166,23 @@ exports.createTransaction = async (req, res) => {
         paymentMethod: finalTags.includes('card') ? 'Credit Card' : 'UPI',
       });
     }
+
+    // Dual-write transaction to Amazon DynamoDB
+    dynamoService
+      .putTransaction(transaction)
+      .then(() =>
+        dynamoService.logActivity({
+          userId: req.user.id.toString(),
+          action: 'EXPENSE_LOGGED',
+          details: {
+            amount: transaction.amount,
+            type: transaction.type,
+            category: transaction.category,
+            description: transaction.description,
+          },
+        })
+      )
+      .catch((dynErr) => logger.warn({ err: dynErr.message }, 'DynamoDB transaction dual-write warning'));
 
     return res.status(201).json({
       success: true,

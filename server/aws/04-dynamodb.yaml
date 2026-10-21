@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight DynamoDB Tables: finsight-ephemeral (Receipt Jobs, Idempotency, Tokens with TTL) and finsight-core (Single-Table Design with GSI)'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    Description: Environment name (staging or prod)
+
+Resources:
+  # ========================================================
+  # 1. Ephemeral Table (Receipt Jobs, Rate Limiting, TTL)
+  # ========================================================
+  EphemeralTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'finsight-ephemeral-${EnvironmentName}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 2. Core Table (Users, Subscriptions, Transactions)
+  # ========================================================
+  CoreTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'finsight-core-${EnvironmentName}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+Outputs:
+  EphemeralTableName:
+    Description: 'DynamoDB Ephemeral Table Name'
+    Value: !Ref EphemeralTable
+    Export:
+      Name: !Sub '${AWS::StackName}-EphemeralTableName'
+
+  EphemeralTableArn:
+    Description: 'DynamoDB Ephemeral Table ARN'
+    Value: !GetAtt EphemeralTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-EphemeralTableArn'
+
+  CoreTableName:
+    Description: 'DynamoDB Core Table Name'
+    Value: !Ref CoreTable
+    Export:
+      Name: !Sub '${AWS::StackName}-CoreTableName'
+
+  CoreTableArn:
+    Description: 'DynamoDB Core Table ARN'
+    Value: !GetAtt CoreTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-CoreTableArn'

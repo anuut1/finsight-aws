@@ -6,6 +6,8 @@ const {
   getAvatarPresignedUrl,
   updateAvatar,
   resetPassword,
+  getActivityLog,
+  getDatabaseInfo,
 } = require('../controllers/authController');
 const { authMiddleware } = require('../middleware/authMiddleware');
 const { validate, z } = require('../middleware/validate');
@@ -41,6 +43,8 @@ router.post('/register', validate(registerSchema), register);
 router.post('/login', validate(loginSchema), login);
 router.post('/reset-password', validate(resetPasswordSchema), resetPassword);
 router.get('/me', authMiddleware, me);
+router.get('/activity', authMiddleware, getActivityLog);
+router.get('/database-info', authMiddleware, getDatabaseInfo);
 router.post('/avatar/presigned-url', authMiddleware, validate(avatarPresignSchema), getAvatarPresignedUrl);
 router.put('/avatar', authMiddleware, validate(updateAvatarSchema), updateAvatar);
 

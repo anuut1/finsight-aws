@@ -2,6 +2,7 @@ const RecurringTemplate = require('../models/RecurringTemplate');
 const User = require('../models/User');
 const { sendTransactionalEmailViaSes } = require('./emailService');
 const { logger } = require('../utils/logger');
+const dynamoService = require('./dynamoService');
 
 /**
  * Catalog of known recurring subscription patterns with smart defaults
@@ -200,6 +201,24 @@ async function syncTransactionSubscription({
         note: `Auto-detected from payment on ${paymentDate.toLocaleDateString('en-IN')}`,
       });
     }
+
+    // Dual-write subscription template & activity log to Amazon DynamoDB
+    dynamoService
+      .putRecurringTemplate(template)
+      .then(() =>
+        dynamoService.logActivity({
+          userId: userId.toString(),
+          action: isNew ? 'SUBSCRIPTION_DETECTED' : 'SUBSCRIPTION_RENEWAL_LOGGED',
+          details: {
+            serviceName: detected.name,
+            amount: template.amount,
+            frequency: template.frequency,
+            nextDueDate,
+            isNew,
+          },
+        })
+      )
+      .catch((dynErr) => logger.warn({ err: dynErr.message }, 'DynamoDB subscription dual-write warning'));
 
     // Attempt to notify user via SES of the newly detected/scheduled renewal
     try {

@@ -1,0 +1,58 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TextractExpenseAnalysis",
+      "Effect": "Allow",
+      "Action": [
+        "textract:AnalyzeExpense"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SesSendEmail",
+      "Effect": "Allow",
+      "Action": [
+        "ses:SendEmail",
+        "ses:SendRawEmail"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3ReceiptsAccess",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::finsight-receipts-private-prod-5196/*"
+    },
+    {
+      "Sid": "ReadSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:ap-south-1:982503294595:secret:finsight/prod/app-secrets-UXVgBv"
+    },
+    {
+      "Sid": "DynamoDBAccess",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:BatchGetItem"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:ap-south-1:982503294595:table/finsight-*",
+        "arn:aws:dynamodb:ap-south-1:982503294595:table/finsight-*/index/*"
+      ]
+    }
+  ]
+}

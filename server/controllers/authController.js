@@ -8,6 +8,7 @@ const {
   generateAvatarViewUrl,
 } = require('../services/s3Service');
 const { sendWelcomeEmailViaSes } = require('../services/emailService');
+const dynamoService = require('../services/dynamoService');
 
 const generateToken = (userId) => {
   const secret = process.env.JWT_SECRET;
@@ -108,7 +109,21 @@ exports.register = async (req, res) => {
       userAgent,
     }).catch((err) => console.warn('[AWS S3 Audit] Error:', err.message));
 
-    // 2. Send welcome email via Amazon SES
+    // 2. Dual-write user & account creation event to Amazon DynamoDB
+    dynamoService
+      .putUser(user)
+      .then(() =>
+        dynamoService.logActivity({
+          userId: user._id.toString(),
+          action: 'ACCOUNT_CREATED',
+          details: { name: user.name, email: user.email },
+          ip: clientIp,
+          userAgent,
+        })
+      )
+      .catch((dynErr) => console.warn('[DynamoDB Register] Warning:', dynErr.message));
+
+    // 3. Send welcome email via Amazon SES
     sendWelcomeEmailViaSes({
       toEmail: user.email,
       userName: user.name,
@@ -171,6 +186,17 @@ exports.login = async (req, res) => {
       ip: clientIp,
       userAgent,
     }).catch((err) => console.warn('[AWS S3 Audit] Error:', err.message));
+
+    // Dual-write user state and audit log to Amazon DynamoDB
+    dynamoService
+      .putUser(user)
+      .then(() =>
+        dynamoService.recordUserLogin(user._id.toString(), {
+          ip: clientIp,
+          userAgent,
+        })
+      )
+      .catch((dynErr) => console.warn('[DynamoDB Login] Warning:', dynErr.message));
 
     const token = generateToken(user._id);
 
@@ -285,6 +311,18 @@ exports.resetPassword = async (req, res) => {
     user.password = newPassword;
     await user.save();
 
+    // Dual-write updated user & log password reset event to DynamoDB
+    dynamoService
+      .putUser(user)
+      .then(() =>
+        dynamoService.logActivity({
+          userId: user._id.toString(),
+          action: 'PASSWORD_RESET',
+          details: { email: user.email },
+        })
+      )
+      .catch((dynErr) => console.warn('[DynamoDB ResetPassword] Warning:', dynErr.message));
+
     const token = generateToken(user._id);
     const userData = user.toJSON();
 
@@ -299,6 +337,65 @@ exports.resetPassword = async (req, res) => {
   } catch (err) {
     console.error('Error resetting password:', err);
     return res.status(500).json({ success: false, message: 'Could not reset password' });
+  }
+};
+
+/**
+ * Retrieve user activity history & audit logs directly from DynamoDB
+ */
+exports.getActivityLog = async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id?.toString();
+    const activities = await dynamoService.getUserActivities(userId, 50);
+    return res.json({
+      success: true,
+      database: 'Amazon DynamoDB (finsight-core-prod)',
+      data: activities,
+    });
+  } catch (err) {
+    console.error('Error fetching activity log:', err);
+    return res.status(500).json({ success: false, message: 'Could not fetch activity log' });
+  }
+};
+
+/**
+ * Retrieve database information and summary
+ */
+exports.getDatabaseInfo = async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id?.toString();
+    const [activities, subscriptions] = await Promise.all([
+      dynamoService.getUserActivities(userId, 20),
+      dynamoService.getRecurringTemplatesByUserId(userId),
+    ]);
+
+    return res.json({
+      success: true,
+      database: {
+        engine: 'Amazon DynamoDB',
+        table: 'finsight-core-prod',
+        secondaryTable: 'finsight-ephemeral-prod',
+        billingMode: 'Pay-per-request (On-Demand)',
+        costEstimate: '$0.00 / month (AWS Free Tier)',
+        encryption: 'AWS Key Management / SSE-S3',
+      },
+      userSummary: {
+        userId,
+        accountCreatedAt: req.user.createdAt,
+        activeSubscriptions: subscriptions.length,
+        subscriptions: subscriptions.map((s) => ({
+          name: s.name,
+          amount: s.amount,
+          frequency: s.frequency,
+          nextDueDate: s.nextDueDate,
+          status: s.status,
+        })),
+        recentActivityCount: activities.length,
+      },
+    });
+  } catch (err) {
+    console.error('Error fetching database info:', err);
+    return res.status(500).json({ success: false, message: 'Could not fetch database info' });
   }
 };
 
