@@ -144,7 +144,12 @@ app.use('/api', apiLimiter);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, data: 'FinSight API is running' });
+  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+  res.json({
+    success: true,
+    data: 'FinSight API is running',
+    database: dbStatus,
+  });
 });
 
 // Public auth routes with rate limiting
@@ -172,16 +177,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    console.log('MongoDB connected');
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
+const server = app.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
+});
+
+if (MONGO_URI) {
+  mongoose
+    .connect(MONGO_URI)
+    .then(() => {
+      logger.info('MongoDB connected');
+    })
+    .catch((err) => {
+      logger.error({ err: err.message }, 'MongoDB connection error - check MONGO_URI in Secrets Manager');
     });
-  })
-  .catch((err) => {
-    console.error('MongoDB connection error', err);
-    process.exit(1);
-  });
+}
 

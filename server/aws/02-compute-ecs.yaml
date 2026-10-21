@@ -302,6 +302,8 @@ Resources:
               Value: 'finsight-receipts-private-prod-5196'
             - Name: AWS_SES_FROM_EMAIL
               Value: 'anushree.tiwari2024@vitstudent.ac.in'
+            - Name: CLIENT_URL
+              Value: 'https://d1nvodd7epprv.cloudfront.net'
           Secrets:
             - Name: MONGO_URI
               ValueFrom: !Sub '${AppSecretsArn}:MONGO_URI::'
