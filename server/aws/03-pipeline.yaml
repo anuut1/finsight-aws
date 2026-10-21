@@ -1,0 +1,385 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'FinSight CI/CD Pipeline: GitHub CodeConnection, CodeBuild (Backend Docker & Frontend Vite), Manual Approval Gate, and ECS Deployment with SNS Notifications'
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    Description: Environment name (staging or prod)
+
+  GitHubOwner:
+    Type: String
+    Default: anuut1
+    Description: GitHub repository owner / username
+
+  GitHubRepo:
+    Type: String
+    Default: finsight-aws
+    Description: GitHub repository name
+
+  GitHubBranch:
+    Type: String
+    Default: feat/aws-architecture
+    Description: Branch to trigger pipeline execution on push
+
+  NotificationEmail:
+    Type: String
+    Default: anushree.tiwari2024@vitstudent.ac.in
+    Description: Email address for pipeline approvals and alerts
+
+  FrontendBucketName:
+    Type: String
+    Default: finsight-web-prod-982503294595
+    Description: Private S3 Web bucket for static frontend assets
+
+  CloudFrontDistributionId:
+    Type: String
+    Default: E3GTC6AK01MPGV
+    Description: CloudFront Distribution ID to invalidate on frontend deploy
+
+  EcsClusterName:
+    Type: String
+    Default: finsight-cluster-prod
+    Description: ECS Cluster name for backend API service
+
+  EcsServiceName:
+    Type: String
+    Default: finsight-api-service-prod
+    Description: ECS Service name for backend API service
+
+  BackendBuildProjectName:
+    Type: String
+    Default: finsight-backend-build-prod
+    Description: Name of existing CodeBuild project for backend Docker build
+
+Resources:
+  # ========================================================
+  # 1. Pipeline Artifact S3 Bucket
+  # ========================================================
+  PipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'finsight-pipeline-artifacts-${EnvironmentName}-${AWS::AccountId}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AutoDeleteOldArtifacts30Days
+            Status: Enabled
+            ExpirationInDays: 30
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 2. SNS Topic for Pipeline Notifications & Approval Gates
+  # ========================================================
+  PipelineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'finsight-pipeline-notifications-${EnvironmentName}'
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref NotificationEmail
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 3. AWS CodeConnection to GitHub
+  # ========================================================
+  CodeStarGitHubConnection:
+    Type: AWS::CodeConnections::Connection
+    Properties:
+      ConnectionName: !Sub 'finsight-github-${EnvironmentName}'
+      ProviderType: GitHub
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 4. IAM Role for Frontend CodeBuild Project
+  # ========================================================
+  CodeBuildFrontendRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightCodeBuildFrontendRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildFrontendPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+              - Sid: FrontendS3Access
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${FrontendBucketName}'
+                  - !Sub 'arn:aws:s3:::${FrontendBucketName}/*'
+              - Sid: ArtifactBucketAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub '${PipelineArtifactBucket.Arn}/*'
+              - Sid: CloudFrontInvalidation
+                Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}'
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 5. Frontend CodeBuild Project
+  # ========================================================
+  FrontendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub 'finsight-frontend-build-${EnvironmentName}'
+      Description: 'Runs client unit tests, builds Vite SPA, syncs to S3 with cache headers, and invalidates CloudFront'
+      ServiceRole: !GetAtt CodeBuildFrontendRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: FRONTEND_BUCKET
+            Value: !Ref FrontendBucketName
+          - Name: CLOUDFRONT_DIST_ID
+            Value: !Ref CloudFrontDistributionId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec-frontend.yml
+      TimeoutInMinutes: 15
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 6. IAM Role for CodePipeline
+  # ========================================================
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'FinSightCodePipelineRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: S3ArtifactAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt PipelineArtifactBucket.Arn
+                  - !Sub '${PipelineArtifactBucket.Arn}/*'
+              - Sid: CodeConnectionAccess
+                Effect: Allow
+                Action:
+                  - codeconnections:UseConnection
+                  - codestar-connections:UseConnection
+                Resource: !GetAtt CodeStarGitHubConnection.Arn
+              - Sid: CodeBuildExecution
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - codebuild:StopBuild
+                Resource:
+                  - !Sub 'arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${BackendBuildProjectName}'
+                  - !GetAtt FrontendBuildProject.Arn
+              - Sid: SnsPublish
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref PipelineNotificationTopic
+              - Sid: EcsDeployAccess
+                Effect: Allow
+                Action:
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                  - ecs:RegisterTaskDefinition
+                  - ecs:UpdateService
+                Resource: '*'
+              - Sid: PassRoleToEcs
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/FinSightTaskExecutionRole-${EnvironmentName}'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/FinSightTaskRole-${EnvironmentName}'
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+  # ========================================================
+  # 7. AWS CodePipeline (Centerpiece CI/CD Orchestration)
+  # ========================================================
+  FinSightPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub 'finsight-pipeline-${EnvironmentName}'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactBucket
+      Stages:
+        # Stage 1: Source
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              OutputArtifacts:
+                - Name: SourceOutput
+              Configuration:
+                ConnectionArn: !GetAtt CodeStarGitHubConnection.Arn
+                FullRepositoryId: !Sub '${GitHubOwner}/${GitHubRepo}'
+                BranchName: !Ref GitHubBranch
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: true
+              RunOrder: 1
+
+        # Stage 2: Build & Automated Tests (Parallel Backend & Frontend)
+        - Name: Build-And-Test
+          Actions:
+            - Name: Backend-Build-And-Test
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BackendBuildOutput
+              Configuration:
+                ProjectName: !Ref BackendBuildProjectName
+              RunOrder: 1
+            - Name: Frontend-Build-And-Deploy
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: FrontendBuildOutput
+              Configuration:
+                ProjectName: !Ref FrontendBuildProject
+              RunOrder: 1
+
+        # Stage 3: Production Gate (Manual Approval)
+        - Name: Production-Approval
+          Actions:
+            - Name: Manual-Approval-Gate
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: '1'
+              Configuration:
+                NotificationArn: !Ref PipelineNotificationTopic
+                CustomData: 'Automated test suites passed! Review build outputs and approve zero-downtime deployment to production ECS.'
+              RunOrder: 1
+
+        # Stage 4: Deploy to ECS Fargate
+        - Name: Deploy-To-Production
+          Actions:
+            - Name: ECS-Rolling-Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: ECS
+                Version: '1'
+              InputArtifacts:
+                - Name: BackendBuildOutput
+              Configuration:
+                ClusterName: !Ref EcsClusterName
+                ServiceName: !Ref EcsServiceName
+                FileName: imagedefinitions.json
+              RunOrder: 1
+      Tags:
+        - Key: Project
+          Value: FinSight
+        - Key: Env
+          Value: !Ref EnvironmentName
+
+Outputs:
+  PipelineName:
+    Description: 'CodePipeline Name'
+    Value: !Ref FinSightPipeline
+    Export:
+      Name: !Sub '${AWS::StackName}-PipelineName'
+
+  PipelineUrl:
+    Description: 'CodePipeline AWS Console URL'
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${FinSightPipeline}/view?region=${AWS::Region}'
+
+  GitHubConnectionArn:
+    Description: 'CodeConnection ARN (Must be activated in AWS Console)'
+    Value: !GetAtt CodeStarGitHubConnection.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-GitHubConnectionArn'
+
+  NotificationTopicArn:
+    Description: 'Pipeline SNS Notification Topic ARN'
+    Value: !Ref PipelineNotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-NotificationTopicArn'

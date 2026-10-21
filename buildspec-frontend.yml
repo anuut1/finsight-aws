@@ -1,0 +1,39 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing client dependencies..."
+      - cd client
+      - npm ci
+      - cd ..
+
+  pre_build:
+    commands:
+      - echo "Running frontend automated test suite..."
+      - cd client
+      - npm test -- --run
+      - cd ..
+
+  build:
+    commands:
+      - echo "Building client production bundle..."
+      - cd client
+      - npm run build
+      - cd ..
+
+  post_build:
+    commands:
+      - echo "Syncing static assets to S3 Web Bucket ($FRONTEND_BUCKET)..."
+      - aws s3 sync client/dist/ s3://$FRONTEND_BUCKET/ --delete --cache-control "public, max-age=31536000, immutable" --exclude "index.html"
+      - aws s3 cp client/dist/index.html s3://$FRONTEND_BUCKET/index.html --cache-control "no-cache, no-store, must-revalidate"
+      - echo "Triggering CloudFront CDN invalidation for Distribution ($CLOUDFRONT_DIST_ID)..."
+      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DIST_ID --paths "/*"
+      - echo "Frontend deployment to CloudFront complete on $(date)!"
+
+artifacts:
+  files:
+    - client/dist/**/*
+  discard-paths: no
